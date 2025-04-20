@@ -103,7 +103,6 @@ def login():
             }
         }))
 
-        # Set access token in cookie
         res.set_cookie(
             key="access_token",
             value=session.access_token,
