@@ -108,7 +108,7 @@ def login():
             key="access_token",
             value=session.access_token,
             httponly=True,
-            secure=False,  # Set to True in production with HTTPS
+            secure=True,  # Set to True in production with HTTPS
             samesite="None",
             max_age=3600
         )
