@@ -108,9 +108,10 @@ def login():
             key="access_token",
             value=session.access_token,
             httponly=True,
-            secure=True,  # Set to True in production with HTTPS
-            samesite="None",
-            max_age=3600
+            secure=True,           # ✅ Required for HTTPS (like on Render)
+            samesite="None",       # ✅ Required if your frontend is hosted elsewhere (cross-origin)
+            max_age=3600,
+            path="/"
         )
 
         return res
