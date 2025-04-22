@@ -4,6 +4,9 @@ from models.research import ResearchPaper
 from database import SessionLocal
 from utils.auth import token_required, role_required
 from sqlalchemy.orm import Session
+from scholarly import scholarly
+from datetime import datetime
+import re
 
 research_bp = Blueprint("research", __name__, url_prefix="/api/v1/research")
 
@@ -14,6 +17,84 @@ def get_db():
         yield db
     finally:
         db.close()
+
+# Utility: Parse scholarly publication into your ResearchPaper-like schema
+def format_scholarly_paper(p, scholar_id=None):
+    pub_date = None
+    try:
+        year = p.get("bib", {}).get("pub_year")
+        month = p.get("bib", {}).get("pub_month", "01")
+        pub_date = datetime.strptime(f"{year}-{month}-01", "%Y-%m-%d").date() if year else None
+    except:
+        pass
+
+    return {
+        "paper_id": None,
+        "title": p.get("bib", {}).get("title"),
+        "abstract": p.get("bib", {}).get("abstract"),
+        "authors": ", ".join(p.get("bib", {}).get("author", "").split(" and ")),
+        "publication_date": str(pub_date) if pub_date else None,
+        "doi": p.get("pub_url", None),
+        "status": "Published",
+        "citations": p.get("num_citations", 0),
+        "scholar_id": p.get("author_pub_id", ""),
+        "source": "scholarly",
+        "created_at": None,
+        "updated_at": None,
+        "user_id": None
+    }
+
+# Route 1: Search by Scholar ID
+@research_bp.route("/fetch-by-id/<string:scholar_id>", methods=["GET"])
+@token_required
+def fetch_by_scholar_id(scholar_id):
+    try:
+        author = scholarly.search_author_id(scholar_id)
+        filled = scholarly.fill(author, sections=["basics", "indices", "counts", "publications"])
+
+        pubs = [scholarly.fill(p) for p in filled.get("publications", [])]
+        formatted = [format_scholarly_paper(p, scholar_id=scholar_id) for p in pubs]
+
+        return jsonify({
+            "scholar_id": scholar_id,
+            "author_name": filled.get("name"),
+            "affiliation": filled.get("affiliation"),
+            "email": filled.get("email_domain"),
+            "interests": filled.get("interests", []),
+            "papers": formatted
+        })
+    except Exception as e:
+        return jsonify({"error": f"Failed to fetch data for Scholar ID: {str(e)}"}), 500
+
+# Route 2: Search by Name
+@research_bp.route("/fetch-by-name", methods=["GET"])
+@token_required
+def fetch_by_name():
+    name = request.args.get("name")
+    if not name:
+        return jsonify({"error": "Please provide a name"}), 400
+
+    try:
+        author = scholarly.search_author(name)
+        first = next(author, None)
+        if not first:
+            return jsonify({"error": "Author not found"}), 404
+
+        filled = scholarly.fill(first, sections=["basics", "indices", "counts", "publications"])
+        pubs = [scholarly.fill(p) for p in filled.get("publications", [])]
+        formatted = [format_scholarly_paper(p, scholar_id=filled.get("scholar_id")) for p in pubs]
+
+        return jsonify({
+            "scholar_id": filled.get("scholar_id"),
+            "author_name": filled.get("name"),
+            "affiliation": filled.get("affiliation"),
+            "email": filled.get("email_domain"),
+            "interests": filled.get("interests", []),
+            "papers": formatted
+        })
+    except Exception as e:
+        return jsonify({"error": f"Failed to fetch author: {str(e)}"}), 500
+    
 
 # Admin or User: View research papers
 @research_bp.route("/", methods=["GET"])

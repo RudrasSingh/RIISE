@@ -3,7 +3,7 @@ from database import Base
 
 class Innovation(Base):
     __tablename__ = "innovation"
-    __table_args__ = {"schema": "CMS"}
+    __table_args__ = {"schema": "RIISE"}
 
     innovation_id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     title = Column(String, nullable=False)
@@ -14,4 +14,4 @@ class Innovation(Base):
     submitted_on = Column(Date, nullable=True)
     created_at = Column(TIMESTAMP, nullable=True)
     updated_at = Column(TIMESTAMP, nullable=True)
-    user_id = Column(Integer, ForeignKey("CMS.users.user_id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("RIISE.users.user_id"), nullable=True)

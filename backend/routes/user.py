@@ -4,6 +4,12 @@ from database import supabase
 from models.users import User
 from database import SessionLocal
 from sqlalchemy.orm import Session
+from utils.auth import token_required, role_required
+from werkzeug.utils import secure_filename
+import os
+from scholarly import scholarly
+from datetime import datetime
+
 
 user_bp = Blueprint("users", __name__, url_prefix="/api/v1/users")
 
@@ -123,3 +129,164 @@ def logout():
     response = make_response(jsonify({"message": "Logged out successfully"}))
     response.set_cookie("access_token", "", expires=0)  # Clear the cookie
     return response
+
+# Route to handle ID card upload for verification
+@user_bp.route("/upload_id_card", methods=["POST"])
+@token_required
+def upload_id_card():
+    # Get the uploaded file from the request
+    file = request.files.get('id_card')
+    if not file:
+        return jsonify({"error": "No file part"}), 400
+
+    # Secure the filename to avoid issues with special characters
+    filename = secure_filename(file.filename)
+    
+    if not filename.lower().endswith(('.jpg', '.jpeg', '.png', '.pdf')):
+        return jsonify({"error": "Invalid file type. Only .jpg, .jpeg, .png, .pdf allowed."}), 400
+
+    try:
+        # Upload the file to Supabase storage
+        response = supabase.storage.from_("id-card").upload(filename, file)
+        
+        # Get the file URL after upload
+        file_url = supabase.storage.from_("id-card").get_public_url(filename).get('publicURL')
+
+        # Now, update the user's record in the database with the file URL
+        db = SessionLocal()
+        user_in_db = db.query(User).filter_by(user_id=request.user['id']).first()
+
+        if not user_in_db:
+            db.close()
+            return jsonify({"error": "User not found"}), 404
+
+        # Update the user's ID card URL in the database
+        user_in_db.id_card_url = file_url
+        db.commit()
+        db.close()
+
+        # Update the user's status to not verified yet
+        user_in_db.is_verified = False
+        db.commit()
+
+        return jsonify({"message": "ID card uploaded successfully. Waiting for verification."}), 200
+
+    except Exception as e:
+        return jsonify({"error": f"Error uploading ID card: {str(e)}"}), 500
+    
+
+@user_bp.route("/profile", methods=["GET"])
+@token_required
+def get_profile():
+    db = next(get_db())
+
+    # Get the email from the token (supabase session)
+    email = request.user.get("email")
+
+    if not email:
+        return jsonify({"error": "Email not found in session"}), 400
+
+    # Retrieve user by email
+    user = db.query(User).filter_by(email=email).first()
+
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    # Return the full user profile
+    user_data = {
+        "name": user.name,
+        "email": user.email,
+        "role": user.role,
+        "scholar_id": user.scholar_id,
+        "h_index": user.h_index,
+        "i10_index": user.i10_index,
+        "total_citations": user.total_citations,
+        "id_card_url": user.id_card_url,
+        "is_verified": user.is_verified
+    }
+
+    return jsonify({
+        "message": "Profile fetched successfully",
+        "profile": user_data
+    }), 200
+
+
+def format_scholarly_paper(p, scholar_id=None):
+    pub_date = None
+    try:
+        year = p.get("bib", {}).get("pub_year")
+        month = p.get("bib", {}).get("pub_month", "01")
+        pub_date = datetime.strptime(f"{year}-{month}-01", "%Y-%m-%d").date() if year else None
+    except:
+        pass
+
+    return {
+        "paper_id": None,
+        "title": p.get("bib", {}).get("title"),
+        "abstract": p.get("bib", {}).get("abstract"),
+        "authors": ", ".join(p.get("bib", {}).get("author", "").split(" and ")),
+        "publication_date": str(pub_date) if pub_date else None,
+        "doi": p.get("pub_url", None),
+        "status": "Published",
+        "citations": p.get("num_citations", 0),
+        "scholar_id": p.get("author_pub_id", ""),
+        "source": "scholarly",
+        "created_at": None,
+        "updated_at": None,
+        "user_id": None
+    }
+
+
+@user_bp.route("/update_profile", methods=["PUT"])
+@token_required
+def update_profile():
+    data = request.json
+    scholar_id = data.get("scholar_id")
+
+    db = next(get_db())
+
+    # Get the email from the token (supabase session)
+    email = request.user.get("email")
+
+    if not email:
+        return jsonify({"error": "Email not found in session"}), 400
+
+    # Retrieve user by email
+    user = db.query(User).filter_by(email=email).first()
+
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    # Update user scholar_id if provided
+    if scholar_id:
+        user.scholar_id = scholar_id
+
+        # Fetch the scholar's data (h_index, i10_index, total_citations) using the scholarly package
+        try:
+            search_query = scholarly.search_author(scholar_id)
+            scholar_data = next(search_query)
+
+            # Fetch the h-index, i10-index, and total citations
+            h_index = scholar_data.hindex
+            i10_index = scholar_data.i10index
+            total_citations = scholar_data.citedby
+
+            # Update the user profile with the fetched scholar data
+            user.h_index = h_index
+            user.i10_index = i10_index
+            user.total_citations = total_citations
+
+            # Optionally, you can also fetch publications (if needed)
+            publications = scholar_data.publications
+            formatted_publications = [format_scholarly_paper(pub, scholar_id) for pub in publications]
+            # You can save these formatted papers to your database as well if required.
+
+        except Exception as e:
+            return jsonify({"error": f"Error fetching scholar data: {str(e)}"}), 500
+
+    db.commit()
+    db.close()
+
+    return jsonify({
+        "message": "Profile updated successfully."
+    }), 200

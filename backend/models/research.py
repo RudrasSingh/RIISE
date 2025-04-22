@@ -3,15 +3,21 @@ from database import Base
 
 class ResearchPaper(Base):
     __tablename__ = "research_paper"
-    __table_args__ = {"schema": "CMS"}
+    __table_args__ = {"schema": "RIISE"}
 
     paper_id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     title = Column(String, nullable=False)
     abstract = Column(Text, nullable=True)
-    authors = Column(String, nullable=True)  # Comma-separated names
+    authors = Column(String, nullable=True)  # Comma-separated names (or move to separate table for 1:N)
     publication_date = Column(Date, nullable=True)
     doi = Column(String, nullable=True)
-    status = Column(String, nullable=True)  # e.g., Published, Draft, etc.
+    status = Column(String, nullable=True)  # e.g., Published, Under Review
+    citations = Column(Integer, nullable=True)
+    scholar_id = Column(String, nullable=True)  # Google Scholar unique paper ID
+    source = Column(String, nullable=True, default="manual")  # manual, scholarly, or imported
+
     created_at = Column(TIMESTAMP, nullable=True)
     updated_at = Column(TIMESTAMP, nullable=True)
-    user_id = Column(Integer, ForeignKey("CMS.users.user_id"), nullable=False)
+
+    # FK to users table in RIISE schema
+    user_id = Column(Integer, ForeignKey("RIISE.users.user_id", ondelete="CASCADE"), nullable=False)
