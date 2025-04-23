@@ -1,7 +1,8 @@
 from functools import wraps
 from flask import request, jsonify
 from database import supabase, SessionLocal
-from models.users import User # Assuming there's a User model that stores verification status
+from models.users import User  # Assuming you have a User model defined in models/users.py
+
 
 def token_required(f):
     @wraps(f)
@@ -50,6 +51,7 @@ def role_required(required_role):
 
 
 def verified_required(func):
+    
     @wraps(func)
     def decorated_function(*args, **kwargs):
         db = SessionLocal()
