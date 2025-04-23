@@ -25,6 +25,7 @@ def format_scholarly_paper(p, scholar_id=None):
         year = p.get("bib", {}).get("pub_year")
         month = p.get("bib", {}).get("pub_month", "01")
         pub_date = datetime.strptime(f"{year}-{month}-01", "%Y-%m-%d").date() if year else None
+        
     except:
         pass
 
@@ -51,8 +52,8 @@ def fetch_by_scholar_id(scholar_id):
     try:
         author = scholarly.search_author_id(scholar_id)
         filled = scholarly.fill(author, sections=["basics", "indices", "counts", "publications"])
+        pubs = [scholarly.fill(p) for p in filled.get("publications", [])[:3]] #limit to 3 publications as backend is overloading
 
-        pubs = [scholarly.fill(p) for p in filled.get("publications", [])]
         formatted = [format_scholarly_paper(p, scholar_id=scholar_id) for p in pubs]
 
         return jsonify({
