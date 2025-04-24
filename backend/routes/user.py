@@ -273,23 +273,23 @@ def update_profile():
 
         # Fetch the scholar's data (h_index, i10_index, total_citations) using the scholarly package
         try:
-            search_query = scholarly.search_author(scholar_id)
-            scholar_data = next(search_query)
-
+            scholar_data = scholarly.fill(scholarly.search_author_id(scholar_id),sections=["basics", "indices"])
+            print(scholar_data)
             # Fetch the h-index, i10-index, and total citations
-            h_index = scholar_data.hindex
-            i10_index = scholar_data.i10index
-            total_citations = scholar_data.citedby
+            h_index = scholar_data.get("hindex", 0)
+            i10_index = scholar_data.get("i10index", 0)
+            total_citations = scholar_data.get("citedby", 0)
+
 
             # Update the user profile with the fetched scholar data
             user.h_index = h_index
             user.i10_index = i10_index
             user.total_citations = total_citations
 
-            # Optionally, you can also fetch publications (if needed)
-            publications = scholar_data.publications
-            formatted_publications = [format_scholarly_paper(pub, scholar_id) for pub in publications]
-            # You can save these formatted papers to your database as well if required.
+            # # Optionally, you can also fetch publications (if needed)
+            # publications = scholar_data.publications
+            # formatted_publications = [format_scholarly_paper(pub, scholar_id) for pub in publications]
+            # TODO:You can save these formatted papers to your database as well if required.
 
         except Exception as e:
             return jsonify({"error": f"Error fetching scholar data: {str(e)}"}), 500
