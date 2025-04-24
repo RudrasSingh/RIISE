@@ -156,13 +156,15 @@ def upload_id_card():
         return jsonify({"error": "Invalid file type. Only .jpg, .jpeg, .png, .pdf allowed."}), 400
 
     try:
-        # Upload the file to Supabase storage
-        response = supabase.storage.from_("id-card").upload(filename, file)
+    # Upload the file to Supabase storage
+        response = supabase.storage.from_("id-card").upload(
+            filename,
+            file.read(),
+            {"content-type": file.content_type}
+        )
         
-        # Get the file URL after upload
         file_url = supabase.storage.from_("id-card").get_public_url(filename).get('publicURL')
 
-        # Now, update the user's record in the database with the file URL
         db = SessionLocal()
         user_in_db = db.query(User).filter_by(user_id=request.user['id']).first()
 
@@ -170,14 +172,10 @@ def upload_id_card():
             db.close()
             return jsonify({"error": "User not found"}), 404
 
-        # Update the user's ID card URL in the database
         user_in_db.id_card_url = file_url
-        db.commit()
-        db.close()
-
-        # Update the user's status to not verified yet
         user_in_db.is_verified = False
         db.commit()
+        db.close()
 
         return jsonify({"message": "ID card uploaded successfully. Waiting for verification."}), 200
 
