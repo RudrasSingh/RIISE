@@ -19,7 +19,7 @@ def create_app():
 
     # Register all blueprints
     app.register_blueprint(startup_bp)
-    app.register_blueprint(user_bp)
+    app.register_blueprint(user_bp)                 
     app.register_blueprint(research_bp)
     app.register_blueprint(ipr_bp)
     app.register_blueprint(innovation_bp)
