@@ -152,26 +152,36 @@ def upload_id_card():
     # Secure the filename to avoid issues with special characters
     filename = secure_filename(file.filename)
     
+    # Validate the file type (only jpg, jpeg, png, pdf)
     if not filename.lower().endswith(('.jpg', '.jpeg', '.png', '.pdf')):
         return jsonify({"error": "Invalid file type. Only .jpg, .jpeg, .png, .pdf allowed."}), 400
 
     try:
-    # Upload the file to Supabase storage
-        response = supabase.storage.from_("id-card").upload(
-            filename,
-            file.read(),
-            {"content-type": file.content_type}
-        )
+        # Get the user's id from the token
+        user_id = request.user['id']
         
-        file_url = supabase.storage.from_("id-card").get_public_url(filename).get('publicURL')
+        # Define the file path within the user's own folder (using user_id)
+        file_path = f"{user_id}/{filename}"  # User folder will be named with their ID
+        
+        # Upload the file to Supabase storage
+        response = supabase.storage.from_("id-card").upload(
+            file_path,
+            file,
+            {"content-type": file.content_type}  # Set content type for file
+        )
 
+        # Get the file's public URL after uploading
+        file_url = supabase.storage.from_("id-card").get_public_url(file_path).get('publicURL')
+
+        # Retrieve the user's record from the database
         db = SessionLocal()
-        user_in_db = db.query(User).filter_by(user_id=request.user['id']).first()
+        user_in_db = db.query(User).filter_by(user_id=user_id).first()
 
         if not user_in_db:
             db.close()
             return jsonify({"error": "User not found"}), 404
 
+        # Update the user's ID card URL and set the verification status to False
         user_in_db.id_card_url = file_url
         user_in_db.is_verified = False
         db.commit()
