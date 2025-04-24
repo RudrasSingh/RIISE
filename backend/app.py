@@ -11,7 +11,7 @@ def create_app():
     app = Flask(__name__)
     CORS(app,
          supports_credentials=True,
-         origins=["http://localhost:5173","https://riise-project.vercel.app"])
+         origins=["http://localhost:5173"])
 
     @app.route("/health", methods=["GET"])
     def health_check():
@@ -19,7 +19,7 @@ def create_app():
 
     # Register all blueprints
     app.register_blueprint(startup_bp)
-    app.register_blueprint(user_bp)                 
+    app.register_blueprint(user_bp)
     app.register_blueprint(research_bp)
     app.register_blueprint(ipr_bp)
     app.register_blueprint(innovation_bp)
