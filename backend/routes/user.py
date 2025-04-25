@@ -116,7 +116,8 @@ def login():
             httponly=True,
             secure=True,           # ✅ Required for HTTPS (like on Render)
             samesite="None",       # ✅ Required if your frontend is hosted elsewhere (cross-origin)
-            max_age=3600
+            max_age=3600,
+            path='/'
         )
 
         #for local testing
