@@ -2,16 +2,21 @@
 from flask import Blueprint, request, jsonify, make_response
 from database import supabase
 from models.users import User
+from models.startup import Startup
+from models.IPR import IPR
+from models.innovation import Innovation
+from models.research import ResearchPaper
 from database import SessionLocal
 from sqlalchemy.orm import Session
-from utils.auth import token_required, role_required
+from utils.auth import token_required,role_required
 from werkzeug.utils import secure_filename
-import os
 from scholarly import scholarly
 from datetime import datetime
+from os import environ
 
 
 user_bp = Blueprint("users", __name__, url_prefix="/api/v1/users")
+ADMIN_SECRET_KEY = environ.get("ADMIN_SECRET")
 
 # Get DB session
 def get_db():
@@ -211,7 +216,13 @@ def get_profile():
     if not user:
         return jsonify({"error": "User not found"}), 404
 
-    # Return the full user profile
+    # Fetch counts for startups, IPR, innovations, and research
+    startups_count = db.query(Startup).filter_by(user_id=user.user_id).count()
+    ipr_count = db.query(IPR).filter_by(user_id=user.user_id).count()
+    innovations_count = db.query(Innovation).filter_by(user_id=user.user_id).count()
+    research_count = db.query(ResearchPaper).filter_by(user_id=user.user_id).count()
+
+    # Return the full user profile along with counts
     user_data = {
         "name": user.name,
         "email": user.email,
@@ -221,7 +232,13 @@ def get_profile():
         "i10_index": user.i10_index,
         "total_citations": user.total_citations,
         "id_card_url": user.id_card_url,
-        "is_verified": user.is_verified
+        "is_verified": user.is_verified,
+        "stats": {
+            "startups": startups_count,
+            "ipr": ipr_count,
+            "innovations": innovations_count,
+            "research": research_count
+        }
     }
 
     return jsonify({
@@ -309,3 +326,163 @@ def update_profile():
     return jsonify({
         "message": "Profile updated successfully."
     }), 200
+
+
+@user_bp.route("/all-profile", methods=["GET"])
+@token_required
+# @role_required("admin")
+def get_all_profiles():
+    db = next(get_db())
+    
+    # Fetch all users except admins
+    users = db.query(User).filter(User.role != "admin").all()
+
+    profiles = []
+
+    for user in users:
+        user_id = user.user_id
+        profile = {
+            "user_id": user_id,
+            "name": user.name,
+            "email": user.email,
+            "role": user.role,
+            "scholar_id": user.scholar_id,
+            "h_index": user.h_index,
+            "i10_index": user.i10_index,
+            "total_citations": user.total_citations,
+            "id_card_url": user.id_card_url,
+            "is_verified": user.is_verified,
+            "stats": {
+                "startups": db.query(Startup).filter_by(user_id=user_id).count(),
+                "ipr": db.query(IPR).filter_by(user_id=user_id).count(),
+                "innovations": db.query(Innovation).filter_by(user_id=user_id).count(),
+                "research_papers": db.query(ResearchPaper).filter_by(user_id=user_id).count()
+            }
+        }
+        profiles.append(profile)
+
+    return jsonify({
+        "message": "All user profiles fetched successfully",
+        "profiles": profiles
+    }), 200
+
+@user_bp.route("/fetch-profile/<string:email>", methods=["GET"])
+@token_required
+# @role_required("admin")
+def get_user_profile_by_email(email):
+    db = next(get_db())
+
+    # Fetch the user by email, excluding admins
+    user = db.query(User).filter(User.email == email, User.role != "admin").first()
+
+    if not user:
+        return jsonify({"error": "User not found or is an admin"}), 404
+
+    profile = {
+        "user_id": user.user_id,
+        "name": user.name,
+        "email": user.email,
+        "role": user.role,
+        "scholar_id": user.scholar_id,
+        "h_index": user.h_index,
+        "i10_index": user.i10_index,
+        "total_citations": user.total_citations,
+        "id_card_url": user.id_card_url,
+        "is_verified": user.is_verified,
+        "stats": {
+            "startups": db.query(Startup).filter_by(user_id=user.user_id).count(),
+            "ipr": db.query(IPR).filter_by(user_id=user.user_id).count(),
+            "innovations": db.query(Innovation).filter_by(user_id=user.user_id).count(),
+            "research_papers": db.query(ResearchPaper).filter_by(user_id=user.user_id).count()
+        }
+    }
+
+    return jsonify({
+        "message": "User profile fetched successfully",
+        "profile": profile
+    }), 200
+
+
+@user_bp.route('/verify-admin', methods=['POST'])
+@token_required
+def verify_admin():
+    """
+    Route to verify an admin user with a secret key
+    Only users with role 'admin' can attempt verification
+    """
+    # Get database session
+    db = SessionLocal()
+    
+    try:
+        # Get the email from the token
+        email = request.user.get("email")
+        if not email:
+            return jsonify({
+                'success': False,
+                'message': 'Email not found in token'
+            }), 400
+            
+        # Get the current user from database
+        current_user = db.query(User).filter_by(email=email).first()
+        if not current_user:
+            return jsonify({
+                'success': False,
+                'message': 'User not found'
+            }), 404
+        
+        # Check if user is admin
+        if current_user.role != 'admin':
+            return jsonify({
+                'success': False,
+                'message': 'Only users with admin role can be verified'
+            }), 403
+            
+        # Check if already verified
+        if current_user.is_verified:
+            return jsonify({
+                'success': True,
+                'message': 'Admin already verified',
+                'is_verified': True,
+                'user_id': current_user.user_id,
+                'email': current_user.email,
+                'name': current_user.name,
+                'role': current_user.role
+            }), 200
+            
+        # Get secret key from request
+        data = request.get_json()
+        if not data or 'secret_key' not in data:
+            return jsonify({
+                'success': False,
+                'message': 'Secret key is required'
+            }), 400
+            
+        # Verify the secret key
+        if data['secret_key'] == ADMIN_SECRET_KEY:
+            current_user.is_verified = True
+            db.commit()
+            
+            return jsonify({
+                'success': True,
+                'message': 'Admin verified successfully',
+                'is_verified': True,
+                'user_id': current_user.user_id,
+                'email': current_user.email,
+                'name': current_user.name,
+                'role': current_user.role
+            }), 200
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid secret key provided'
+            }), 401
+    
+    except Exception as e:
+        db.rollback()
+        return jsonify({
+            'success': False,
+            'message': f'Error: {str(e)}'
+        }), 500
+    
+    finally:
+        db.close()

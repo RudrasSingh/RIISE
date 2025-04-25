@@ -15,3 +15,6 @@ class Innovation(Base):
     created_at = Column(TIMESTAMP, nullable=True)
     updated_at = Column(TIMESTAMP, nullable=True)
     user_id = Column(Integer, ForeignKey("RIISE.users.user_id"), nullable=True)
+
+    def to_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}

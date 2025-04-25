@@ -4,6 +4,7 @@ from routes.startup import startup_bp
 from routes.research import research_bp
 from routes.IPR import ipr_bp
 from routes.user import user_bp
+from routes.export import export_bp
 from routes.innovation import innovation_bp
 
 def create_app():
@@ -20,8 +21,8 @@ def create_app():
     app.register_blueprint(startup_bp)
     app.register_blueprint(user_bp)
     app.register_blueprint(research_bp)
-    app.register_blueprint(ipr_bp)
     app.register_blueprint(innovation_bp)
+    app.register_blueprint(export_bp)
 
     return app
 

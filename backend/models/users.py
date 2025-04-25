@@ -16,3 +16,6 @@ class User(Base):
     total_citations = Column(Integer, nullable=True)
     id_card_url = Column(String, nullable=True)
     is_verified = Column(Boolean, default=False)
+
+    def to_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}

@@ -21,3 +21,6 @@ class ResearchPaper(Base):
 
     # FK to users table in RIISE schema
     user_id = Column(Integer, ForeignKey("RIISE.users.user_id", ondelete="CASCADE"), nullable=False)
+    
+    def to_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
