@@ -152,6 +152,7 @@ def add_research_paper():
 # Update research paper
 @research_bp.route("/update-paper/<int:paper_id>", methods=["PUT"])
 @token_required
+@role_required("admin")
 def update_research_paper(paper_id):
     db = next(get_db())
     user_id = request.user["id"]

@@ -66,6 +66,7 @@ def add_startup():
 # Update startup
 @startup_bp.route("/update-startup/<int:startup_id>", methods=["PUT"])
 @token_required
+@role_required("admin")
 def update_startup(startup_id):
     db = next(get_db())
     user_id = request.user["id"]

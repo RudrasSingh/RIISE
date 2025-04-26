@@ -67,6 +67,7 @@ def add_ipr():
 # Update IPR
 @ipr_bp.route("/update-ipr/<int:ipr_id>", methods=["PUT"])
 @token_required
+@role_required("admin")
 def update_ipr(ipr_id):
     db = next(get_db())
     user_id = request.user["id"]

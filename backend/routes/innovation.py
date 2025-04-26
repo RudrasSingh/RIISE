@@ -63,6 +63,7 @@ def add_innovation():
 # Update innovation
 @innovation_bp.route("/update-innovation/<int:innovation_id>", methods=["PUT"])
 @token_required
+@role_required("admin")
 def update_innovation(innovation_id):
     db = next(get_db())
     user_id = request.user["id"]
