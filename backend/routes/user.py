@@ -203,6 +203,7 @@ def upload_id_card():
 @token_required
 def get_profile():
     db = next(get_db())
+    
 
     # Get the email from the token (supabase session)
     email = request.user.get("email")
