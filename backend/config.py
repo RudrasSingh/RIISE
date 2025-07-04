@@ -1,10 +1,10 @@
 import os
 from dotenv import load_dotenv
-from urllib.parse import quote
+from urllib.parse import quote_plus
 load_dotenv()
 
 # URL-encode the password for safety with special characters
-DB_PASSWORD = quote(os.getenv("DB_PASSWORD", ""))
+DB_PASSWORD = quote_plus(os.getenv("DB_PASSWORD", ""))
 
 # Supabase API connection details
 SUPABASE_URL = os.getenv("SUPABASE_URL")
