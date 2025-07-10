@@ -141,10 +141,51 @@ def login():
         return jsonify({"error": str(e)}), 400
 
 @user_bp.route("/logout", methods=["POST"])
+@token_required
 def logout():
-    response = make_response(jsonify({"message": "Logged out successfully"}))
-    response.set_cookie("access_token", "", expires=0)  # Clear the cookie
-    return response
+    try:
+        # Get the current token to sign out from Supabase
+        token = request.cookies.get("access_token")
+        if token:
+            try:
+                # Sign out from Supabase
+                supabase.auth.sign_out()
+            except Exception as e:
+                # Continue even if Supabase logout fails
+                print(f"Supabase logout error: {str(e)}")
+        
+        # Create response
+        response = make_response(jsonify({"message": "Logged out successfully"}))
+        
+        # Clear the cookie with the EXACT SAME parameters used in login
+        # This matches your production cookie settings exactly
+        response.set_cookie(
+            key="access_token",
+            value="",
+            httponly=True,
+            secure=True,           # ✅ Same as login - Required for HTTPS
+            samesite="None",       # ✅ Same as login - Required for cross-origin
+            expires=0,             # ✅ Expire immediately
+            path='/',              # ✅ Same as login - Important for cookie clearing
+            max_age=0              # ✅ Additional expiration setting
+        )
+        
+        return response
+        
+    except Exception as e:
+        # Even if there's an error, still try to clear the cookie
+        response = make_response(jsonify({"message": "Logged out successfully"}))
+        response.set_cookie(
+            key="access_token",
+            value="",
+            httponly=True,
+            secure=True,
+            samesite="None",
+            expires=0,
+            path='/',
+            max_age=0
+        )
+        return response, 200
 
 # Route to handle ID card upload for verification
 @user_bp.route("/upload_id_card", methods=["POST"])

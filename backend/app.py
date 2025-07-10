@@ -23,6 +23,7 @@ def create_app():
     app.register_blueprint(research_bp)
     app.register_blueprint(innovation_bp)
     app.register_blueprint(export_bp)
+    app.register_blueprint(ipr_bp)
 
     return app
 
