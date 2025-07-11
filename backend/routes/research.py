@@ -52,8 +52,8 @@ def fetch_by_scholar_id(scholar_id):
     try:
         author = scholarly.search_author_id(scholar_id)
         filled = scholarly.fill(author, sections=["basics", "indices", "counts", "publications"])
-        # pubs = [scholarly.fill(p) for p in filled.get("publications", [])[:3]] #limit to 3 publications as backend is overloading
-        pubs = [scholarly.fill(p) for p in filled.get("publications", [])] #no limit to publications as backend is overloading
+        pubs = [scholarly.fill(p) for p in filled.get("publications", [])[:3]] #limit to 3 publications as backend is overloading
+        # pubs = [scholarly.fill(p) for p in filled.get("publications", [])] #no limit to publications as backend is overloading
 
         formatted = [format_scholarly_paper(p, scholar_id=scholar_id) for p in pubs]
 
@@ -83,7 +83,7 @@ def fetch_by_name():
             return jsonify({"error": "Author not found"}), 404
 
         filled = scholarly.fill(first, sections=["basics", "indices", "counts", "publications"])
-        pubs = [scholarly.fill(p) for p in filled.get("publications", [])]
+        pubs = [scholarly.fill(p) for p in filled.get("publications", [])[:3]]
         formatted = [format_scholarly_paper(p, scholar_id=filled.get("scholar_id")) for p in pubs]
 
         return jsonify({
