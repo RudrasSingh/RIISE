@@ -4,11 +4,70 @@ from models.research import ResearchPaper
 from database import SessionLocal
 from utils.auth import token_required, role_required
 from sqlalchemy.orm import Session
-from scholarly import scholarly
 from datetime import datetime
-import re
+import time
+import random
+import os
+import requests
 
 research_bp = Blueprint("research", __name__, url_prefix="/api/v1/research")
+
+# SerpAPI configuration
+SERPAPI_KEY = os.getenv("SERPAPI_KEY", "serpapi_key_here")
+SERPAPI_BASE_URL = "https://serpapi.com/search"
+
+def serpapi_search_author(author_name, num_results=10):
+    """Search for author using SerpAPI Google Scholar API"""
+    params = {
+        "engine": "google_scholar",
+        "q": f"author:{author_name}",
+        "api_key": SERPAPI_KEY,
+        "num": num_results
+    }
+    
+    try:
+        response = requests.get(SERPAPI_BASE_URL, params=params)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return None
+    except Exception as e:
+        return None
+
+def serpapi_get_author_details(author_id):
+    """Get detailed author information using SerpAPI"""
+    params = {
+        "engine": "google_scholar_author",
+        "author_id": author_id,
+        "api_key": SERPAPI_KEY
+    }
+    
+    try:
+        response = requests.get(SERPAPI_BASE_URL, params=params)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return None
+    except Exception as e:
+        return None
+
+def extract_author_id_from_result(result):
+    """Extract author ID from search result"""
+    try:
+        organic_results = result.get("organic_results", [])
+        
+        for item in organic_results:
+            if "author_info" in item and "author_id" in item["author_info"]:
+                return item["author_info"]["author_id"]
+            
+            link = item.get("link", "")
+            if "scholar.google.com/citations?user=" in link:
+                author_id = link.split("user=")[1].split("&")[0]
+                return author_id
+        
+        return None
+    except:
+        return None
 
 # Get DB session
 def get_db():
@@ -18,57 +77,33 @@ def get_db():
     finally:
         db.close()
 
-# Utility: Parse scholarly publication into your ResearchPaper-like schema
-def format_scholarly_paper(p, scholar_id=None):
+# Format SerpAPI paper for response
+def format_serpapi_paper(p, scholar_id=None):
     pub_date = None
     try:
-        year = p.get("bib", {}).get("pub_year")
-        month = p.get("bib", {}).get("pub_month", "01")
-        pub_date = datetime.strptime(f"{year}-{month}-01", "%Y-%m-%d").date() if year else None
-        
+        year = p.get("year")
+        if year:
+            pub_date = datetime.strptime(f"{year}-01-01", "%Y-%m-%d").date()
     except:
         pass
 
     return {
         "paper_id": None,
-        "title": p.get("bib", {}).get("title"),
-        "abstract": p.get("bib", {}).get("abstract"),
-        "authors": ", ".join(p.get("bib", {}).get("author", "").split(" and ")),
+        "title": p.get("title"),
+        "abstract": p.get("snippet"),
+        "authors": ", ".join([author.get("name", "") for author in p.get("authors", [])]),
         "publication_date": str(pub_date) if pub_date else None,
-        "doi": p.get("pub_url", None),
+        "doi": p.get("link"),
         "status": "Published",
-        "citations": p.get("num_citations", 0),
-        "scholar_id": p.get("author_pub_id", ""),
-        "source": "scholarly",
+        "citations": p.get("cited_by", {}).get("value", 0),
+        "scholar_id": p.get("result_id", ""),
+        "source": "serpapi",
         "created_at": None,
         "updated_at": None,
         "user_id": None
     }
 
-# Route 1: Search by Scholar ID
-@research_bp.route("/fetch-by-id/<string:scholar_id>", methods=["GET"])
-@token_required
-def fetch_by_scholar_id(scholar_id):
-    try:
-        author = scholarly.search_author_id(scholar_id)
-        filled = scholarly.fill(author, sections=["basics", "indices", "counts", "publications"])
-        pubs = [scholarly.fill(p) for p in filled.get("publications", [])[:2]] #limit to 3 publications as backend is overloading
-        # pubs = [scholarly.fill(p) for p in filled.get("publications", [])] #no limit to publications as backend is overloading
-
-        formatted = [format_scholarly_paper(p, scholar_id=scholar_id) for p in pubs]
-
-        return jsonify({
-            "scholar_id": scholar_id,
-            "author_name": filled.get("name"),
-            "affiliation": filled.get("affiliation"),
-            "email": filled.get("email_domain"),
-            "interests": filled.get("interests", []),
-            "papers": formatted
-        })
-    except Exception as e:
-        return jsonify({"error": f"Failed to fetch data for Scholar ID: {str(e)}"}), 500
-
-# Route 2: Search by Name
+# Search by name
 @research_bp.route("/fetch-by-name", methods=["GET"])
 @token_required
 def fetch_by_name():
@@ -77,28 +112,126 @@ def fetch_by_name():
         return jsonify({"error": "Please provide a name"}), 400
 
     try:
-        author = scholarly.search_author(name)
-        first = next(author, None)
-        if not first:
+        if not SERPAPI_KEY or SERPAPI_KEY == "your_serpapi_key_here":
+            return jsonify({"error": "SERPAPI_KEY not configured"}), 500
+        
+        cleaned_name = name.replace("%20", " ").strip()
+        result = serpapi_search_author(cleaned_name)
+        
+        if not result or result.get("search_metadata", {}).get("status") != "Success":
+            return jsonify({"error": "Search failed"}), 500
+        
+        organic_results = result.get("organic_results", [])
+        if not organic_results:
             return jsonify({"error": "Author not found"}), 404
-
-        filled = scholarly.fill(first, sections=["basics", "indices", "counts", "publications"])
-        pubs = [scholarly.fill(p) for p in filled.get("publications", [])[:3]]
-        formatted = [format_scholarly_paper(p, scholar_id=filled.get("scholar_id")) for p in pubs]
+        
+        # Try to extract author ID
+        author_id = extract_author_id_from_result(result)
+        
+        if not author_id:
+            # Return basic information from search results
+            first_result = organic_results[0]
+            publications = organic_results[:3]
+            formatted_pubs = []
+            
+            for pub in publications:
+                try:
+                    formatted_pubs.append(format_serpapi_paper(pub))
+                except:
+                    continue
+            
+            return jsonify({
+                "scholar_id": None,
+                "author_name": cleaned_name,
+                "affiliation": first_result.get("author_info", {}).get("affiliation"),
+                "email": None,
+                "interests": [],
+                "papers": formatted_pubs,
+                "source": "serpapi"
+            })
+        
+        # Get detailed information
+        detailed_result = serpapi_get_author_details(author_id)
+        
+        if not detailed_result:
+            return jsonify({"error": "Failed to fetch author details"}), 500
+        
+        # Extract author information
+        author_info = detailed_result.get("author", {})
+        
+        # Get publications (limited to 10)
+        publications = detailed_result.get("articles", [])[:10]
+        formatted_pubs = []
+        
+        for pub in publications:
+            try:
+                formatted_pubs.append(format_serpapi_paper(pub, scholar_id=author_id))
+            except:
+                continue
 
         return jsonify({
-            "scholar_id": filled.get("scholar_id"),
-            "author_name": filled.get("name"),
-            "affiliation": filled.get("affiliation"),
-            "email": filled.get("email_domain"),
-            "interests": filled.get("interests", []),
-            "papers": formatted
+            "scholar_id": author_id,
+            "author_name": author_info.get("name"),
+            "affiliation": author_info.get("affiliations"),
+            "email": author_info.get("email"),
+            "interests": author_info.get("interests", []),
+            "papers": formatted_pubs,
+            "source": "serpapi",
+            "citation_indices": {
+                "h_index": author_info.get("cited_by", {}).get("table", [{}])[0].get("h_index"),
+                "i10_index": author_info.get("cited_by", {}).get("table", [{}])[0].get("i10_index"),
+                "total_citations": author_info.get("cited_by", {}).get("table", [{}])[0].get("citations", {}).get("all")
+            }
         })
+        
     except Exception as e:
-        return jsonify({"error": f"Failed to fetch author: {str(e)}"}), 500
-    
+        return jsonify({"error": "Failed to fetch author"}), 500
 
-# Admin or User: View research papers
+# Search by Scholar ID
+@research_bp.route("/fetch-by-id/<string:scholar_id>", methods=["GET"])
+@token_required
+def fetch_by_scholar_id(scholar_id):
+    try:
+        if not SERPAPI_KEY or SERPAPI_KEY == "your_serpapi_key_here":
+            return jsonify({"error": "SERPAPI_KEY not configured"}), 500
+        
+        result = serpapi_get_author_details(scholar_id)
+        
+        if not result or result.get("search_metadata", {}).get("status") != "Success":
+            return jsonify({"error": "Scholar ID not found"}), 404
+        
+        # Extract author information
+        author_info = result.get("author", {})
+        
+        # Get publications (limited to 10)
+        publications = result.get("articles", [])[:10]
+        formatted_pubs = []
+        
+        for pub in publications:
+            try:
+                formatted_pubs.append(format_serpapi_paper(pub, scholar_id=scholar_id))
+            except:
+                continue
+
+        return jsonify({
+            "scholar_id": scholar_id,
+            "author_name": author_info.get("name"),
+            "affiliation": author_info.get("affiliations"),
+            "email": author_info.get("email"),
+            "interests": author_info.get("interests", []),
+            "papers": formatted_pubs,
+            "source": "serpapi",
+            "citation_indices": {
+                "h_index": author_info.get("cited_by", {}).get("table", [{}])[0].get("h_index"),
+                "i10_index": author_info.get("cited_by", {}).get("table", [{}])[0].get("i10_index"),
+                "total_citations": author_info.get("cited_by", {}).get("table", [{}])[0].get("citations", {}).get("all")
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({"error": "Failed to fetch data"}), 500
+
+# Database operations
 @research_bp.route("/", methods=["GET"])
 @token_required
 def get_all_research_papers():
@@ -124,7 +257,6 @@ def get_all_research_papers():
         "user_id": p.user_id,
     } for p in papers])
 
-# Add research paper
 @research_bp.route("/add-paper", methods=["POST"])
 @token_required
 def add_research_paper():
@@ -149,10 +281,8 @@ def add_research_paper():
 
     return jsonify({"message": "Research paper created", "paper_id": new_paper.paper_id})
 
-# Update research paper
 @research_bp.route("/update-paper/<int:paper_id>", methods=["PUT"])
 @token_required
-@role_required("admin")
 def update_research_paper(paper_id):
     db = next(get_db())
     user_id = request.user["id"]
@@ -178,7 +308,6 @@ def update_research_paper(paper_id):
 
     return jsonify({"message": "Research paper updated"})
 
-# Delete research paper (Admin only)
 @research_bp.route("/delete-paper/<int:paper_id>", methods=["DELETE"])
 @token_required
 @role_required("admin")

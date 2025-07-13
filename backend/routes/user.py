@@ -115,25 +115,25 @@ def login():
         }))
 
         #for produn
-        res.set_cookie(
-            key="access_token",
-            value=session.access_token,
-            httponly=True,
-            secure=True,           # ✅ Required for HTTPS (like on Render)
-            samesite="None",       # ✅ Required if your frontend is hosted elsewhere (cross-origin)
-            max_age=3600,
-            path='/'
-        )
-
-        # for local testing
         # res.set_cookie(
         #     key="access_token",
         #     value=session.access_token,
         #     httponly=True,
-        #     secure=False,  # Set to True in production with HTTPS
-        #     samesite="None",
-        #     max_age=3600
+        #     secure=True,           # ✅ Required for HTTPS (like on Render)
+        #     samesite="None",       # ✅ Required if your frontend is hosted elsewhere (cross-origin)
+        #     max_age=3600,
+        #     path='/'
         # )
+
+        # for local testing
+        res.set_cookie(
+            key="access_token",
+            value=session.access_token,
+            httponly=True,
+            secure=False,  # Set to True in production with HTTPS
+            samesite="None",
+            max_age=3600
+        )
 
         return res
     
@@ -319,7 +319,80 @@ def format_scholarly_paper(p, scholar_id=None):
 @token_required
 def update_profile():
     data = request.json
-    scholar_id = data.get("scholar_id")
+    
+    db = next(get_db())
+
+    # Get the email from the token (supabase session)
+    email = request.user.get("email")
+
+    if not email:
+        return jsonify({"error": "Email not found in session"}), 400
+
+    # Retrieve user by email
+    user = db.query(User).filter_by(email=email).first()
+
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    # List of fields that can be updated by the user
+    updatable_fields = ["name", "scholar_id"]
+    updated_fields = []
+
+    # Update allowed fields if provided
+    for field in updatable_fields:
+        if field in data and data[field] is not None:
+            setattr(user, field, data[field])
+            updated_fields.append(field)
+
+    # Special handling for scholar_id - fetch additional scholar data
+    if "scholar_id" in data and data["scholar_id"]:
+        try:
+            scholar_data = scholarly.fill(scholarly.search_author_id(data["scholar_id"]), sections=["basics", "indices"])
+            
+            # Fetch the h-index, i10-index, and total citations
+            h_index = scholar_data.get("hindex", 0)
+            i10_index = scholar_data.get("i10index", 0)
+            total_citations = scholar_data.get("citedby", 0)
+
+            # Update the user profile with the fetched scholar data
+            user.h_index = h_index
+            user.i10_index = i10_index
+            user.total_citations = total_citations
+            
+            updated_fields.extend(["h_index", "i10_index", "total_citations"])
+
+        except Exception as e:
+            return jsonify({"error": f"Error fetching scholar data: {str(e)}"}), 500
+
+    # Check if any fields were actually updated
+    if not updated_fields:
+        return jsonify({"error": "No valid fields provided for update"}), 400
+
+    try:
+        db.commit()
+        db.close()
+
+        return jsonify({
+            "message": "Profile updated successfully",
+            "updated_fields": updated_fields
+        }), 200
+
+    except Exception as e:
+        db.rollback()
+        db.close()
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
+
+@user_bp.route("/update_profile_field", methods=["PATCH"])
+@token_required
+def update_profile_field():
+    """
+    Update a specific field of the user's profile
+    Supports updating: name, scholar_id
+    """
+    data = request.json
+    
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
 
     db = next(get_db())
 
@@ -335,196 +408,95 @@ def update_profile():
     if not user:
         return jsonify({"error": "User not found"}), 404
 
-    # Update user scholar_id if provided
-    if scholar_id:
-        user.scholar_id = scholar_id
-
-        # Fetch the scholar's data (h_index, i10_index, total_citations) using the scholarly package
-        try:
-            scholar_data = scholarly.fill(scholarly.search_author_id(scholar_id),sections=["basics", "indices"])
-            print(scholar_data)
-            # Fetch the h-index, i10-index, and total citations
-            h_index = scholar_data.get("hindex", 0)
-            i10_index = scholar_data.get("i10index", 0)
-            total_citations = scholar_data.get("citedby", 0)
-
-
-            # Update the user profile with the fetched scholar data
-            user.h_index = h_index
-            user.i10_index = i10_index
-            user.total_citations = total_citations
-
-            # # Optionally, you can also fetch publications (if needed)
-            # publications = scholar_data.publications
-            # formatted_publications = [format_scholarly_paper(pub, scholar_id) for pub in publications]
-            # TODO:You can save these formatted papers to your database as well if required.
-
-        except Exception as e:
-            return jsonify({"error": f"Error fetching scholar data: {str(e)}"}), 500
-
-    db.commit()
-    db.close()
-
-    return jsonify({
-        "message": "Profile updated successfully."
-    }), 200
-
-
-@user_bp.route("/all-profile", methods=["GET"])
-@token_required
-# @role_required("admin")
-def get_all_profiles():
-    db = next(get_db())
-    
-    # Fetch all users except admins
-    users = db.query(User).filter(User.role != "admin").all()
-
-    profiles = []
-
-    for user in users:
-        user_id = user.user_id
-        profile = {
-            "user_id": user_id,
-            "name": user.name,
-            "email": user.email,
-            "role": user.role,
-            "scholar_id": user.scholar_id,
-            "h_index": user.h_index,
-            "i10_index": user.i10_index,
-            "total_citations": user.total_citations,
-            "id_card_url": user.id_card_url,
-            "is_verified": user.is_verified,
-            "stats": {
-                "startups": db.query(Startup).filter_by(user_id=user_id).count(),
-                "ipr": db.query(IPR).filter_by(user_id=user_id).count(),
-                "innovations": db.query(Innovation).filter_by(user_id=user_id).count(),
-                "research_papers": db.query(ResearchPaper).filter_by(user_id=user_id).count()
-            }
-        }
-        profiles.append(profile)
-
-    return jsonify({
-        "message": "All user profiles fetched successfully",
-        "profiles": profiles
-    }), 200
-
-@user_bp.route("/fetch-profile/<string:email>", methods=["GET"])
-@token_required
-# @role_required("admin")
-def get_user_profile_by_email(email):
-    db = next(get_db())
-
-    # Fetch the user by email, excluding admins
-    user = db.query(User).filter(User.email == email, User.role != "admin").first()
-
-    if not user:
-        return jsonify({"error": "User not found or is an admin"}), 404
-
-    profile = {
-        "user_id": user.user_id,
-        "name": user.name,
-        "email": user.email,
-        "role": user.role,
-        "scholar_id": user.scholar_id,
-        "h_index": user.h_index,
-        "i10_index": user.i10_index,
-        "total_citations": user.total_citations,
-        "id_card_url": user.id_card_url,
-        "is_verified": user.is_verified,
-        "stats": {
-            "startups": db.query(Startup).filter_by(user_id=user.user_id).count(),
-            "ipr": db.query(IPR).filter_by(user_id=user.user_id).count(),
-            "innovations": db.query(Innovation).filter_by(user_id=user.user_id).count(),
-            "research_papers": db.query(ResearchPaper).filter_by(user_id=user.user_id).count()
-        }
+    # Define which fields can be updated by users
+    updatable_fields = {
+        "name": str,
+        "scholar_id": str
     }
 
-    return jsonify({
-        "message": "User profile fetched successfully",
-        "profile": profile
-    }), 200
-
-
-@user_bp.route('/verify-admin', methods=['POST'])
-@token_required
-def verify_admin():
-    """
-    Route to verify an admin user with a secret key
-    Only users with role 'admin' can attempt verification
-    """
-    # Get database session
-    db = SessionLocal()
+    # Validate that only one field is being updated
+    provided_fields = [key for key in data.keys() if key in updatable_fields]
     
+    if len(provided_fields) == 0:
+        return jsonify({
+            "error": "No valid field provided",
+            "updatable_fields": list(updatable_fields.keys())
+        }), 400
+
+    if len(provided_fields) > 1:
+        return jsonify({
+            "error": "Only one field can be updated at a time",
+            "provided_fields": provided_fields
+        }), 400
+
+    field_name = provided_fields[0]
+    field_value = data[field_name]
+
+    # Validate field value type
+    expected_type = updatable_fields[field_name]
+    if not isinstance(field_value, expected_type):
+        return jsonify({
+            "error": f"Invalid type for {field_name}. Expected {expected_type.__name__}"
+        }), 400
+
+    # Additional validation for specific fields
+    if field_name == "name" and (not field_value or len(field_value.strip()) < 2):
+        return jsonify({"error": "Name must be at least 2 characters long"}), 400
+
+    if field_name == "scholar_id" and (not field_value or len(field_value.strip()) < 5):
+        return jsonify({"error": "Scholar ID must be at least 5 characters long"}), 400
+
     try:
-        # Get the email from the token
-        email = request.user.get("email")
-        if not email:
-            return jsonify({
-                'success': False,
-                'message': 'Email not found in token'
-            }), 400
-            
-        # Get the current user from database
-        current_user = db.query(User).filter_by(email=email).first()
-        if not current_user:
-            return jsonify({
-                'success': False,
-                'message': 'User not found'
-            }), 404
+        # Update the field
+        setattr(user, field_name, field_value.strip() if isinstance(field_value, str) else field_value)
         
-        # Check if user is admin
-        if current_user.role != 'admin':
-            return jsonify({
-                'success': False,
-                'message': 'Only users with admin role can be verified'
-            }), 403
-            
-        # Check if already verified
-        if current_user.is_verified:
-            return jsonify({
-                'success': True,
-                'message': 'Admin already verified',
-                'is_verified': True,
-                'user_id': current_user.user_id,
-                'email': current_user.email,
-                'name': current_user.name,
-                'role': current_user.role
-            }), 200
-            
-        # Get secret key from request
-        data = request.get_json()
-        if not data or 'secret_key' not in data:
-            return jsonify({
-                'success': False,
-                'message': 'Secret key is required'
-            }), 400
-            
-        # Verify the secret key
-        if data['secret_key'] == ADMIN_SECRET_KEY:
-            current_user.is_verified = True
-            db.commit()
-            
-            return jsonify({
-                'success': True,
-                'message': 'Admin verified successfully',
-                'is_verified': True,
-                'user_id': current_user.user_id,
-                'email': current_user.email,
-                'name': current_user.name,
-                'role': current_user.role
-            }), 200
-        else:
-            return jsonify({
-                'success': False,
-                'message': 'Invalid secret key provided'
-            }), 401
-    
+        # Special handling for scholar_id - fetch additional scholar data
+        if field_name == "scholar_id":
+            try:
+                scholar_data = scholarly.fill(scholarly.search_author_id(field_value), sections=["basics", "indices"])
+                
+                # Fetch the h-index, i10-index, and total citations
+                h_index = scholar_data.get("hindex", 0)
+                i10_index = scholar_data.get("i10index", 0)
+                total_citations = scholar_data.get("citedby", 0)
+
+                # Update the user profile with the fetched scholar data
+                user.h_index = h_index
+                user.i10_index = i10_index
+                user.total_citations = total_citations
+                
+                db.commit()
+                db.close()
+
+                return jsonify({
+                    "message": f"Profile {field_name} updated successfully",
+                    "updated_field": field_name,
+                    "new_value": field_value,
+                    "scholar_data": {
+                        "h_index": h_index,
+                        "i10_index": i10_index,
+                        "total_citations": total_citations
+                    }
+                }), 200
+
+            except Exception as e:
+                db.rollback()
+                db.close()
+                return jsonify({"error": f"Error fetching scholar data: {str(e)}"}), 500
+
+        # For other fields, just commit the change
+        db.commit()
+        db.close()
+
+        return jsonify({
+            "message": f"Profile {field_name} updated successfully",
+            "updated_field": field_name,
+            "new_value": field_value
+        }), 200
+
     except Exception as e:
         db.rollback()
-        return jsonify({
-            'success': False,
-            'message': f'Error: {str(e)}'
-        }), 500
-    
-    finally:
         db.close()
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
+
+# ...existing code...
