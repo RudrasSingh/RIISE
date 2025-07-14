@@ -10,13 +10,34 @@ from database import SessionLocal
 from sqlalchemy.orm import Session
 from utils.auth import token_required,role_required
 from werkzeug.utils import secure_filename
-from scholarly import scholarly
 from datetime import datetime
 from os import environ
-
+import requests
+import os
 
 user_bp = Blueprint("users", __name__, url_prefix="/api/v1/users")
 ADMIN_SECRET_KEY = environ.get("ADMIN_SECRET")
+
+# SerpAPI configuration
+SERPAPI_KEY = os.getenv("SERPAPI_KEY", "your_serpapi_key_here")
+SERPAPI_BASE_URL = "https://serpapi.com/search"
+
+def serpapi_get_author_details(author_id):
+    """Get detailed author information using SerpAPI"""
+    params = {
+        "engine": "google_scholar_author",
+        "author_id": author_id,
+        "api_key": SERPAPI_KEY
+    }
+    
+    try:
+        response = requests.get(SERPAPI_BASE_URL, params=params)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return None
+    except Exception as e:
+        return None
 
 # Get DB session
 def get_db():
@@ -344,25 +365,63 @@ def update_profile():
             setattr(user, field, data[field])
             updated_fields.append(field)
 
-    # Special handling for scholar_id - fetch additional scholar data
+    # Special handling for scholar_id - fetch additional scholar data using SerpAPI
     if "scholar_id" in data and data["scholar_id"]:
         try:
-            scholar_data = scholarly.fill(scholarly.search_author_id(data["scholar_id"]), sections=["basics", "indices"])
+            if not SERPAPI_KEY or SERPAPI_KEY == "your_serpapi_key_here":
+                # Still update the scholar_id but return warning
+                db.commit()
+                db.close()
+                return jsonify({
+                    "message": "Profile updated successfully",
+                    "updated_fields": updated_fields,
+                    "warning": "SERPAPI_KEY not configured, scholar metrics not fetched"
+                }), 200
             
-            # Fetch the h-index, i10-index, and total citations
-            h_index = scholar_data.get("hindex", 0)
-            i10_index = scholar_data.get("i10index", 0)
-            total_citations = scholar_data.get("citedby", 0)
+            # Get detailed author information using SerpAPI
+            result = serpapi_get_author_details(data["scholar_id"])
+            
+            if result and result.get("search_metadata", {}).get("status") == "Success":
+                # Extract author information
+                author_info = result.get("author", {})
+                
+                # Get citation indices from the cited_by table
+                cited_by_table = author_info.get("cited_by", {}).get("table", [])
+                if cited_by_table:
+                    citation_data = cited_by_table[0]  # First row contains the data
+                    h_index = citation_data.get("h_index", 0)
+                    i10_index = citation_data.get("i10_index", 0)
+                    total_citations = citation_data.get("citations", {}).get("all", 0)
+                else:
+                    h_index = 0
+                    i10_index = 0
+                    total_citations = 0
 
-            # Update the user profile with the fetched scholar data
-            user.h_index = h_index
-            user.i10_index = i10_index
-            user.total_citations = total_citations
-            
-            updated_fields.extend(["h_index", "i10_index", "total_citations"])
+                # Update the user profile with the fetched scholar data
+                user.h_index = h_index
+                user.i10_index = i10_index
+                user.total_citations = total_citations
+                
+                updated_fields.extend(["h_index", "i10_index", "total_citations"])
+            else:
+                # Still update the scholar_id but return warning
+                db.commit()
+                db.close()
+                return jsonify({
+                    "message": "Profile updated successfully",
+                    "updated_fields": updated_fields,
+                    "warning": "Scholar data not found for this ID"
+                }), 200
 
         except Exception as e:
-            return jsonify({"error": f"Error fetching scholar data: {str(e)}"}), 500
+            # Still update the scholar_id but return error info
+            db.commit()
+            db.close()
+            return jsonify({
+                "message": "Profile updated successfully",
+                "updated_fields": updated_fields,
+                "error": f"Error fetching scholar data: {str(e)}"
+            }), 200
 
     # Check if any fields were actually updated
     if not updated_fields:
@@ -450,39 +509,78 @@ def update_profile_field():
         # Update the field
         setattr(user, field_name, field_value.strip() if isinstance(field_value, str) else field_value)
         
-        # Special handling for scholar_id - fetch additional scholar data
+        # Special handling for scholar_id - fetch additional scholar data using SerpAPI
         if field_name == "scholar_id":
             try:
-                scholar_data = scholarly.fill(scholarly.search_author_id(field_value), sections=["basics", "indices"])
+                if not SERPAPI_KEY or SERPAPI_KEY == "your_serpapi_key_here":
+                    # Still update the scholar_id but return warning
+                    db.commit()
+                    db.close()
+                    return jsonify({
+                        "message": f"Profile {field_name} updated successfully",
+                        "updated_field": field_name,
+                        "new_value": field_value,
+                        "warning": "SERPAPI_KEY not configured, scholar metrics not fetched"
+                    }), 200
                 
-                # Fetch the h-index, i10-index, and total citations
-                h_index = scholar_data.get("hindex", 0)
-                i10_index = scholar_data.get("i10index", 0)
-                total_citations = scholar_data.get("citedby", 0)
+                # Get detailed author information using SerpAPI
+                result = serpapi_get_author_details(field_value)
+                
+                if result and result.get("search_metadata", {}).get("status") == "Success":
+                    # Extract author information
+                    author_info = result.get("author", {})
+                    
+                    # Get citation indices from the cited_by table
+                    cited_by_table = author_info.get("cited_by", {}).get("table", [])
+                    if cited_by_table:
+                        citation_data = cited_by_table[0]  # First row contains the data
+                        h_index = citation_data.get("h_index", 0)
+                        i10_index = citation_data.get("i10_index", 0)
+                        total_citations = citation_data.get("citations", {}).get("all", 0)
+                    else:
+                        h_index = 0
+                        i10_index = 0
+                        total_citations = 0
 
-                # Update the user profile with the fetched scholar data
-                user.h_index = h_index
-                user.i10_index = i10_index
-                user.total_citations = total_citations
-                
+                    # Update the user profile with the fetched scholar data
+                    user.h_index = h_index
+                    user.i10_index = i10_index
+                    user.total_citations = total_citations
+                    
+                    db.commit()
+                    db.close()
+
+                    return jsonify({
+                        "message": f"Profile {field_name} updated successfully",
+                        "updated_field": field_name,
+                        "new_value": field_value,
+                        "scholar_data": {
+                            "h_index": h_index,
+                            "i10_index": i10_index,
+                            "total_citations": total_citations
+                        }
+                    }), 200
+                else:
+                    # Still update the scholar_id but return warning
+                    db.commit()
+                    db.close()
+                    return jsonify({
+                        "message": f"Profile {field_name} updated successfully",
+                        "updated_field": field_name,
+                        "new_value": field_value,
+                        "warning": "Scholar data not found for this ID"
+                    }), 200
+
+            except Exception as e:
+                # Still update the scholar_id but return error info
                 db.commit()
                 db.close()
-
                 return jsonify({
                     "message": f"Profile {field_name} updated successfully",
                     "updated_field": field_name,
                     "new_value": field_value,
-                    "scholar_data": {
-                        "h_index": h_index,
-                        "i10_index": i10_index,
-                        "total_citations": total_citations
-                    }
+                    "error": f"Error fetching scholar data: {str(e)}"
                 }), 200
-
-            except Exception as e:
-                db.rollback()
-                db.close()
-                return jsonify({"error": f"Error fetching scholar data: {str(e)}"}), 500
 
         # For other fields, just commit the change
         db.commit()
